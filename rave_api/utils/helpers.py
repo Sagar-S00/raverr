@@ -195,6 +195,7 @@ def get_meshes(
                 "lang": lang
             }
             response = client.get("/meshes/self", params=params)
+            # print(response.text)
             if response.status_code == 200:
                 data = response.json().get("data", [])
                 for item in data:

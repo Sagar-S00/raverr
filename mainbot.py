@@ -10,7 +10,7 @@ from bot_commands import register_commands
 from bot_events import register_events
 
 logging.basicConfig(
-    level=logging.ERROR,
+    level=logging.INFO,  # Changed to INFO to see connection attempts
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 async def main():
     """Main bot manager function"""
     device_id = "3e8e7a1a3514465ea7d5933cf855d22a"
-    auth_token = "318992d9edb53e2ae370c0777e0789be"
+    auth_token = "7847a3e7c4c30d08e6ae3de17ed2cb8e"
     peer_id = "122414287_3e8e7a1a3514465ea7d5933cf855d22a"
     
     api_client = RaveAPIClient(auth_token=auth_token)

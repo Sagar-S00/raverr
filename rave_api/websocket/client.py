@@ -17,7 +17,7 @@ from urllib.parse import urlencode
 
 import websockets
 from websockets.client import WebSocketClientProtocol
-from websockets.exceptions import ConnectionClosed, WebSocketException
+from websockets.exceptions import ConnectionClosed, WebSocketException, InvalidStatus, NegotiationError
 
 from .protoo import ProtooRequest, ProtooNotification
 
@@ -31,8 +31,7 @@ except (AttributeError, ImportError, ValueError):
     # Fallback: assume version 12.0+
     WEBSOCKETS_VERSION = (12, 0, 0)
 
-# Detect OS
-IS_LINUX = platform.system().lower() == 'linux'
+# OS detection removed - both platforms use same config
 
 
 class RaveWebSocketClient:
@@ -125,16 +124,19 @@ class RaveWebSocketClient:
         
         return f"{base_url}/?{query_string}"
     
-    def _build_headers(self) -> Dict[str, str]:
+    def _build_headers(self, include_protocol: bool = False) -> Dict[str, str]:
         """Build WebSocket headers as per SocketManager.createRequest()"""
         headers = {
-            "Authorization": f"Bearer {self.auth_token}" if self.auth_token else "",
             "API-Version": "4"
         }
         
-        # On Linux, include Sec-WebSocket-Protocol in headers (current working behavior)
-        # On Windows, let subprotocols parameter handle it to avoid HTTP 400
-        if IS_LINUX:
+        # Only include Authorization header if auth_token is provided
+        # Empty headers can cause server rejection
+        if self.auth_token:
+            headers["Authorization"] = f"Bearer {self.auth_token}"
+        
+        # Add Sec-WebSocket-Protocol header if requested
+        if include_protocol:
             headers["Sec-WebSocket-Protocol"] = "protoo"
         
         return headers
@@ -157,20 +159,23 @@ class RaveWebSocketClient:
             return False
         
         url = self._build_url()
-        headers = self._build_headers()
         
         if self.debug:
             logger.info(f"Connecting to {url}")
+        
+        # Build headers before try block so they're available for error logging
+        # Start with headers without protocol - we'll add it if needed
+        headers = self._build_headers(include_protocol=False)
         
         try:
             # Create SSL context
             ssl_context = self._create_ssl_context()
             
-            # Connect with custom headers and subprotocol
-            # The "protoo" subprotocol is required (from SocketManager.java line 163)
-            # Use additional_headers for websockets 12.0+, but handle version differences
+            # Try different approaches based on platform
+            # Strategy: Try with subprotocols parameter first (standard approach)
+            # If that fails, try with header, then try without any subprotocol
             connect_kwargs = {
-                "subprotocols": ["protoo"],  # Required subprotocol
+                "subprotocols": ["protoo"],  # Try with subprotocols parameter first
                 "ssl": ssl_context,
                 "ping_interval": None  # We'll handle ping manually
             }
@@ -183,23 +188,49 @@ class RaveWebSocketClient:
                 # Older versions might use extra_headers or handle it differently
                 connect_kwargs["extra_headers"] = headers
             
+            # Use subprotocols parameter (proven working method from test)
+            # This is the standard and reliable method
+            connect_kwargs = {
+                "subprotocols": ["protoo"],
+                "ssl": ssl_context,
+                "ping_interval": None
+            }
+            
+            # Add headers
+            if WEBSOCKETS_VERSION >= (12, 0, 0):
+                connect_kwargs["additional_headers"] = headers
+            else:
+                connect_kwargs["extra_headers"] = headers
+            
+            if self.debug:
+                logger.debug(f"Connecting with subprotocols: ['protoo'], headers: {list(headers.keys())}")
+            
+            # Try connection - if it fails, try fallback methods
             try:
                 self.websocket = await websockets.connect(url, **connect_kwargs)
-            except (TypeError, ValueError) as e:
-                # If additional_headers/extra_headers doesn't work, try without it
-                # This might happen if the version check was wrong or there's a bug
-                error_msg = str(e)
-                if "extra_headers" in error_msg or "additional_headers" in error_msg or "unexpected keyword" in error_msg:
-                    if self.debug:
-                        logger.warning(f"Headers parameter not supported: {e}, trying without headers")
-                    connect_kwargs.pop("additional_headers", None)
-                    connect_kwargs.pop("extra_headers", None)
-                    self.websocket = await websockets.connect(url, **connect_kwargs)
-                    if self.debug:
-                        logger.warning("Connected without custom headers - authentication might fail")
+            except (NegotiationError, InvalidStatus) as e:
+                # If subprotocols fails, try with header only as fallback
+                if self.debug:
+                    logger.debug(f"Subprotocols method failed, trying header-only fallback")
+                
+                headers_with_protocol = self._build_headers(include_protocol=True)
+                fallback_kwargs = {
+                    "ssl": ssl_context,
+                    "ping_interval": None
+                }
+                
+                if WEBSOCKETS_VERSION >= (12, 0, 0):
+                    fallback_kwargs["additional_headers"] = headers_with_protocol
                 else:
-                    # Re-raise if it's a different error
-                    raise
+                    fallback_kwargs["extra_headers"] = headers_with_protocol
+                
+                try:
+                    self.websocket = await websockets.connect(url, **fallback_kwargs)
+                    if self.debug:
+                        logger.debug("Connection successful with header-only fallback")
+                except Exception as fallback_error:
+                    # Both methods failed, raise original error
+                    raise e
             
             self.is_connected = True
             self.retry_count = 0  # Reset retry count on successful connection
@@ -222,6 +253,57 @@ class RaveWebSocketClient:
             
             return True
             
+        except InvalidStatus as e:
+            # Handle HTTP status errors (like 400, 401, 403, etc.)
+            # Try multiple ways to extract status code
+            status_code = getattr(e, 'status_code', None)
+            if status_code is None:
+                # Try to get from response object
+                response = getattr(e, 'response', None)
+                if response:
+                    status_code = getattr(response, 'status_code', None)
+            
+            # Parse status code from error message if still None
+            if status_code is None:
+                error_msg = str(e)
+                import re
+                match = re.search(r'HTTP (\d+)', error_msg)
+                if match:
+                    status_code = int(match.group(1))
+            
+            # Default to 400 if we can't determine (most common case)
+            if status_code is None:
+                status_code = 400
+            
+            if status_code == 400:
+                logger.error(f"Connection failed: InvalidStatus - server rejected WebSocket connection: HTTP 400")
+                logger.error(f"This usually means the server doesn't accept the connection parameters (subprotocol, headers, or URL)")
+                # Always log connection details for HTTP 400 to help diagnose
+                logger.error(f"Connection URL: {url}")
+                logger.error(f"Connection headers: {headers}")
+                logger.error(f"Subprotocols: ['protoo']")
+                logger.error(f"Room ID: {self.room_id}, Peer ID: {self.peer_id}")
+                logger.error(f"Server: {self.server}, Auth token present: {bool(self.auth_token)}")
+            elif status_code == 401:
+                logger.error(f"Connection failed: InvalidStatus - Authentication failed: HTTP 401")
+                logger.error(f"Connection URL: {url}")
+                logger.error(f"Auth token present: {bool(self.auth_token)}")
+                if self.debug:
+                    logger.debug(f"Headers: {headers}")
+            elif status_code == 403:
+                logger.error(f"Connection failed: InvalidStatus - Access forbidden: HTTP 403")
+                logger.error(f"Connection URL: {url}")
+                if self.debug:
+                    logger.debug(f"Headers: {headers}")
+            else:
+                logger.error(f"Connection failed: InvalidStatus - server rejected WebSocket connection: HTTP {status_code}")
+                logger.error(f"Connection URL: {url}")
+                if self.debug:
+                    logger.debug(f"Headers: {headers}")
+            self.is_connected = False
+            if self.on_error:
+                self.on_error(e)
+            return False
         except Exception as e:
             error_type = type(e).__name__
             error_msg = str(e)
