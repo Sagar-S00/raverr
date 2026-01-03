@@ -5,8 +5,8 @@ import requests
 
 
 # Initialize Cloudflare Workers AI client
-CLOUDFLARE_API_KEY = os.getenv("CLOUDFLARE_API_KEY", "4c_KdIglpx-8qjF_qwnasZYSlMsjFwKCOfSaBZjc")
-CLOUDFLARE_ACCOUNT_ID = os.getenv("CLOUDFLARE_ACCOUNT_ID", "3860b8a7aef7b8c166e09fe254939799")
+CLOUDFLARE_API_KEY = os.getenv("CLOUDFLARE_API_KEY", "")
+CLOUDFLARE_ACCOUNT_ID = os.getenv("CLOUDFLARE_ACCOUNT_ID", "")
 
 openai = OpenAI(
     api_key=CLOUDFLARE_API_KEY,
