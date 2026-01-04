@@ -1,4 +1,6 @@
 import os
+import json
+import requests
 from openai import OpenAI
 
 # =========================
@@ -26,93 +28,62 @@ client = OpenAI(
 with open("luci.txt", "r", encoding="utf-8") as f:
     SYSTEM_PROMPT = f.read()
 
-# =========================
-# Initial test input
-# =========================
+# Initialize chat history dictionary
+chat_history = {}
 
-INITIAL_USER_INPUT = "hello bitch are you dead?"
+def streamai(user_input, chatId):
+    headers = {
+        'authority': 'api.edenai.run',
+        'accept': 'application/json, text/plain, */*',
+        'accept-language': 'en-IN,en-GB;q=0.9,en-US;q=0.8,en;q=0.7',
+        'authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiYjczNzMwZDEtMDQ1Ny00ZjJhLTljOGEtNzczMzIwZDZmMWNlIiwidHlwZSI6ImZyb250X2FwaV90b2tlbiJ9.Oqqk9Ihpee6iim5JuPVHr1vEaImqKYSfdiNo3jMoYVE',
+        'content-type': 'application/json',
+        'origin': 'https://app.edenai.run',
+        'referer': 'https://app.edenai.run/',
+        'sec-ch-ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"Windows"',
+        'sec-fetch-dest': 'empty',
+        'sec-fetch-mode': 'cors',
+        'sec-fetch-site': 'same-site',
+        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    }
+    
 
-# =========================
-# Models + seeded replies
-# =========================
 
-SEED_DATA = {
-    "@cf/meta/llama-3.2-3b-instruct":
-        "I'm not dead, I'm just having a worse day than you.",
 
-    "@cf/mistral/mistral-7b-instruct-v0.1":
-        "Akane: (squinting) What's your problem, Ass-tart?",
-
-    "@cf/mistral/mistral-7b-instruct-v0.2-lora":
-        "Akane: (rolling her eyes) Typical. Can't even form a proper greeting.",
-
-    "@hf/mistral/mistral-7b-instruct-v0.2":
-        "Akane: I'm alive, but barely. How about you, ass?",
-
-    "@cf/meta/llama-3.3-70b-instruct-fp8-fast":
-        "I'm alive, unfortunately.",
-
-    "@cf/google/gemma-3-12b-it":
-        "Ugh. Not even close.",
-
-    "@hf/nousresearch/hermes-2-pro-mistral-7b":
-        "oh, i'm so sorry. i didn't realize being called a bitch could bring me back to life. how exciting.",
-
-    "@cf/qwen/qwq-32b":
-        "Wow. That’s your opening line? I’m alive — barely impressed.",
-
-    "@cf/defog/sqlcoder-7b-2":
-        "Akane: deadpan. holy cringe. Tsk."
+    json_data = {
+   "providers":"perplexityai",
+   "text":user_input,
+   "temperature":0.1,
+   "max_tokens":1000,
+   "settings":{
+      "perplexityai":"sonar-pro"
+   },
+   "previous_history":[
+      
+   ],
+   "chatbot_global_action":SYSTEM_PROMPT,
+   "response_as_dict":False
 }
+    response = requests.post('https://api.edenai.run/v2/text/chat/stream', headers=headers, json=json_data, stream=True)
+    
+    if response.status_code == 200:
+        sentence = ''
+        for line in response.iter_lines(decode_unicode=True):
+            if line:
+                try:
+                    response_data = json.loads(line)
+                    text = response_data.get('text', '')
+                    sentence += text
+                except json.JSONDecodeError as e:
+                    print(f"Error decoding JSON: {e}")
+        
+        chat_history[chatId]["messages"].append({"role": "assistant", "message": sentence})
+        return sentence
+    else:
+        return False
 
-# =========================
-# Build per-model memory
-# =========================
+    
 
-conversation_history = {}
-
-for model, assistant_reply in SEED_DATA.items():
-    conversation_history[model] = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": INITIAL_USER_INPUT},
-        {"role": "assistant", "content": assistant_reply},
-    ]
-
-# =========================
-# Continue conversation
-# =========================
-
-def continue_conversation(user_input: str):
-    for model in conversation_history:
-        try:
-            # add user message
-            conversation_history[model].append(
-                {"role": "user", "content": user_input}
-            )
-
-            res = client.chat.completions.create(
-                model=model,
-                messages=conversation_history[model],
-                temperature=0.7,
-                max_tokens=200,
-            )
-
-            reply = res.choices[0].message.content.strip()
-
-            # save assistant reply
-            conversation_history[model].append(
-                {"role": "assistant", "content": reply}
-            )
-
-            print(f"{model} : {reply}")
-
-        except Exception as e:
-            print(f"{model} : ERROR -> {e}")
-
-# =========================
-# Example usage
-# =========================
-
-if __name__ == "__main__":
-    continue_conversation("that is why your tits are so small")
-
+print(streamai("hello bitch are you dead?", "123"))
