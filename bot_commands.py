@@ -2,8 +2,13 @@
 Bot command handlers
 """
 
+import asyncio
 import logging
+import os
+import subprocess
+import sys
 import requests
+from pathlib import Path
 from rave_api.utils import get_video_id, vote_video
 from video_utils import search_and_send_videos, find_video_info_by_reply
 
@@ -123,4 +128,45 @@ def register_commands(manager):
         except Exception as e:
             logger.error(f"Error in dare command: {e}", exc_info=True)
             await ctx.reply("❌ An error occurred. Please try again later.")
+    
+    @manager.command("restart")
+    async def restart_command(ctx):
+        """Restart the bot (Linux only)"""
+        # Check if running on Linux
+        if sys.platform != "linux":
+            await ctx.reply("❌ Restart command is only available on Linux systems.")
+            return
+        
+        # Get the script directory
+        script_dir = Path(__file__).parent.absolute()
+        restart_script = script_dir / "restart.sh"
+        
+        # Check if restart script exists
+        if not restart_script.exists():
+            await ctx.reply("❌ Restart script not found. Please create restart.sh in the bot directory.")
+            return
+        
+        # Make sure script is executable
+        try:
+            os.chmod(restart_script, 0o755)
+        except Exception as e:
+            logger.warning(f"Could not set execute permissions on restart.sh: {e}")
+        
+        await ctx.reply("🔄 Restarting bot... This may take a few seconds.")
+        
+        try:
+            # Execute the restart script in the background
+            # Use nohup and redirect output to avoid blocking
+            subprocess.Popen(
+                ["/bin/bash", str(restart_script)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True
+            )
+            # Give it a moment to start
+            await asyncio.sleep(1)
+            await ctx.reply("✅ Restart command executed. The bot should restart shortly.")
+        except Exception as e:
+            logger.error(f"Error executing restart script: {e}", exc_info=True)
+            await ctx.reply(f"❌ Failed to restart bot: {str(e)}")
 
