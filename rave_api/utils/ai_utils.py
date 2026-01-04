@@ -46,7 +46,7 @@ PERPLEXITY_MODEL = "sonar-pro"
 # Cloudflare Workers AI configuration
 CLOUDFLARE_API_KEY = os.getenv("CLOUDFLARE_API_KEY", "")
 CLOUDFLARE_ACCOUNT_ID = os.getenv("CLOUDFLARE_ACCOUNT_ID", "")
-CLOUDFLARE_MODEL = "@cf/meta/llama-3.1-8b-instruct"
+CLOUDFLARE_MODEL = "@hf/nousresearch/hermes-2-pro-mistral-7b"
 
 # Initialize Cloudflare Workers AI client
 cloudflare_client = OpenAI(
@@ -98,7 +98,7 @@ def add_user_message(mesh_id: str, user_name: str, content: str):
     add_message(mesh_id, "user", formatted_content)
 
 
-def get_response(mesh_id: str) -> Optional[str]:
+def get_response77(mesh_id: str) -> Optional[str]:
     """
     Get AI response using Perplexity API for a given mesh (backup method).
     
@@ -134,7 +134,7 @@ def get_response(mesh_id: str) -> Optional[str]:
         return None
 
 
-def get_response44(mesh_id: str) -> Optional[str]:
+def get_response(mesh_id: str) -> Optional[str]:
     """
     Get AI response using Cloudflare Workers AI for a given mesh.
     
