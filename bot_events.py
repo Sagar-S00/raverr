@@ -4,7 +4,7 @@ Bot event handlers
 
 import logging
 from rave_api.utils import ai_utils
-
+from pprint import pprint
 logger = logging.getLogger(__name__)
 
 # Configuration for AI responses
@@ -15,9 +15,12 @@ def register_events(manager):
     """Register all bot event handlers with the manager"""
     
     @manager.event("on_user_join")
-    async def on_user_join_handler(user_info):
+    async def on_user_join_handler(bot, user_info):
         """Handle when a user joins any mesh"""
-        pass  # Removed logging as per cleanup requirements
+        # pprint(user_info)
+        # Handle both displayName and name fields
+        user_name = user_info.get('displayName') or user_info.get('name') or user_info.get('handle') or 'User'
+        await bot.send_message(f"welcome {user_name} to the chat")
     
     @manager.event("on_user_left")
     async def on_user_left_handler(user_info):
@@ -29,7 +32,7 @@ def register_events(manager):
         """Handle when bot connects to a mesh - send hello message"""
         if not hasattr(bot, 'video_info_map'):
             bot.video_info_map = {}
-        await bot.send_message("hello everyone")
+        # await bot.send_message("hello everyone")
     
     @manager.event("on_message")
     async def on_message_handler(message_info):

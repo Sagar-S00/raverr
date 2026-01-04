@@ -1,89 +1,90 @@
-import os
-import json
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
 import requests
-from openai import OpenAI
+from io import BytesIO
 
-# =========================
-# Cloudflare config
-# =========================
+TEMPLATE = "glassuiround.png"
+OUTPUT = "profile_correct.png"
 
-CLOUDFLARE_API_KEY = os.getenv(
-    "CLOUDFLARE_API_KEY",
-    ""
-)
-CLOUDFLARE_ACCOUNT_ID = os.getenv(
-    "CLOUDFLARE_ACCOUNT_ID",
-    ""
-)
-
-client = OpenAI(
-    api_key=CLOUDFLARE_API_KEY,
-    base_url=f"https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/v1",
-)
-
-# =========================
-# Load system prompt
-# =========================
-
-with open("luci.txt", "r", encoding="utf-8") as f:
-    SYSTEM_PROMPT = f.read()
-
-# Initialize chat history dictionary
-chat_history = {}
-
-def streamai(user_input, chatId):
-    headers = {
-        'authority': 'api.edenai.run',
-        'accept': 'application/json, text/plain, */*',
-        'accept-language': 'en-IN,en-GB;q=0.9,en-US;q=0.8,en;q=0.7',
-        'authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiYjczNzMwZDEtMDQ1Ny00ZjJhLTljOGEtNzczMzIwZDZmMWNlIiwidHlwZSI6ImZyb250X2FwaV90b2tlbiJ9.Oqqk9Ihpee6iim5JuPVHr1vEaImqKYSfdiNo3jMoYVE',
-        'content-type': 'application/json',
-        'origin': 'https://app.edenai.run',
-        'referer': 'https://app.edenai.run/',
-        'sec-ch-ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-        'sec-ch-ua-mobile': '?0',
-        'sec-ch-ua-platform': '"Windows"',
-        'sec-fetch-dest': 'empty',
-        'sec-fetch-mode': 'cors',
-        'sec-fetch-site': 'same-site',
-        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    }
-    
-
-
-
-    json_data = {
-   "providers":"perplexityai",
-   "text":user_input,
-   "temperature":0.1,
-   "max_tokens":1000,
-   "settings":{
-      "perplexityai":"sonar-pro"
-   },
-   "previous_history":[
-      
-   ],
-   "chatbot_global_action":SYSTEM_PROMPT,
-   "response_as_dict":False
+user = {
+    "name": "Krish",
+    "id": "74307746",
+    "country": "IN",
+    "status": "Not in Rave",
+    "state": "Not Friends",
+    "language": "EN",
+    "online": True,
+    "avatar": "https://avatars2.prod.hilljam.com/kVpX8K/c68bf782-large.jpeg"
 }
-    response = requests.post('https://api.edenai.run/v2/text/chat/stream', headers=headers, json=json_data, stream=True)
-    
-    if response.status_code == 200:
-        sentence = ''
-        for line in response.iter_lines(decode_unicode=True):
-            if line:
-                try:
-                    response_data = json.loads(line)
-                    text = response_data.get('text', '')
-                    sentence += text
-                except json.JSONDecodeError as e:
-                    print(f"Error decoding JSON: {e}")
-        
-        chat_history[chatId]["messages"].append({"role": "assistant", "message": sentence})
-        return sentence
-    else:
-        return False
 
-    
+img = Image.open(TEMPLATE).convert("RGBA")
+draw = ImageDraw.Draw(img)
 
-print(streamai("hello bitch are you dead?", "123"))
+# ---------------- FONTS ----------------
+FONT_NAME = ImageFont.truetype("arialbd.ttf", 52)
+FONT_ID = ImageFont.truetype("arial.ttf", 26)
+FONT_ROW = ImageFont.truetype("arial.ttf", 30)
+
+# ---------------- AVATAR (PERFECT CIRCLE) ----------------
+# Circle center and radius from template
+CIRCLE_CENTER_X = 133  # Center of the outer circle
+CIRCLE_CENTER_Y = 127
+INNER_RADIUS = 75      # Radius of inner circle (half of 150)
+
+# Calculate top-left corner for paste
+INNER_SIZE = INNER_RADIUS * 2  # 150px
+INNER_X = CIRCLE_CENTER_X - INNER_RADIUS
+INNER_Y = CIRCLE_CENTER_Y - INNER_RADIUS
+
+avatar = Image.open(
+    BytesIO(requests.get(user["avatar"]).content)
+).convert("RGBA").resize((INNER_SIZE, INNER_SIZE), Image.LANCZOS)
+
+# Create perfect circular mask
+mask = Image.new("L", (INNER_SIZE, INNER_SIZE), 0)
+ImageDraw.Draw(mask).ellipse((0, 0, INNER_SIZE, INNER_SIZE), fill=255)
+
+# Paste avatar centered
+img.paste(avatar, (INNER_X, INNER_Y), mask)
+
+# ---------------- TEXT SHADOW FUNCTION ----------------
+def text_with_shadow(x, y, text, font):
+    draw.text((x+2, y+2), text, font=font, fill=(0,0,0,120))
+    draw.text((x, y), text, font=font, fill=(255,255,255,255))
+
+# ---------------- HEADER ----------------
+TEXT_X = 255  # Adjusted to align better with "Krish"
+TEXT_Y = 60   # Adjusted vertical position
+
+text_with_shadow(TEXT_X, TEXT_Y, user["name"], FONT_NAME)
+draw.text((TEXT_X, TEXT_Y + 66), f"ID: {user['id']}",
+          font=FONT_ID, fill=(200,200,200,255))
+
+# ---------------- ONLINE DOT ----------------
+if user["online"]:
+    dot_x = img.width - 115
+    dot_y = TEXT_Y + 20
+    draw.ellipse((dot_x, dot_y, dot_x+20, dot_y+20), fill=(0,255,118,255))
+
+# ---------------- ROW ALIGNMENT (CENTERED VERTICALLY) ----------------
+# More precise divider positions
+DIVIDERS = [235, 310, 385, 460, 540]
+
+rows = [
+    ("Country", user["country"]),
+    ("Status", user["status"]),
+    ("State", user["state"]),
+    ("Language", user["language"]),
+]
+
+LABEL_X = 120
+VALUE_X = 520
+
+for i, (label, value) in enumerate(rows):
+    # Center text vertically between dividers
+    y = (DIVIDERS[i] + DIVIDERS[i+1]) // 2 - 15  # -15 to center 30px font
+    draw.text((LABEL_X, y), label, font=FONT_ROW, fill=(255,255,255,255))
+    draw.text((VALUE_X, y), value, font=FONT_ROW, fill=(220,220,220,255))
+
+# ---------------- SAVE ----------------
+img.save(OUTPUT)
+print("✅ PERFECTLY ALIGNED:", OUTPUT)

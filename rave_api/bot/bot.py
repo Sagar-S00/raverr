@@ -96,6 +96,9 @@ class RaveBot:
         # Track current users (set of user IDs)
         self.current_user_ids: Set[int] = set()
         
+        # Flag to track if user list has been initialized from mesh info
+        self._users_initialized = False
+        
         # Cache user display names per mesh (user_id -> display_name)
         self.user_name_cache: Dict[str, Dict[int, str]] = {}  # mesh_id -> {user_id: display_name}
         
@@ -119,15 +122,59 @@ class RaveBot:
         @self.command("help")
         async def help_command(ctx):
             """Show available commands"""
-            commands_list = []
+            # Get primary prefix (first one)
+            primary_prefix = self.command_prefixes[0] if self.command_prefixes else "!"
+            other_prefixes = ", ".join(self.command_prefixes[1:]) if len(self.command_prefixes) > 1 else None
+            
+            # Organize commands into categories
+            basic_commands = []
+            video_commands = []
+            game_commands = []
+            info_commands = []
+            
+            # Categorize commands
             for cmd_name, cmd_func in self.commands.items():
                 doc = cmd_func.__doc__ or "No description"
-                # Show all prefixes for each command
-                prefix_examples = " / ".join([f"`{prefix}{cmd_name}`" for prefix in self.command_prefixes])
-                commands_list.append(f"{prefix_examples} - {doc}")
+                cmd_line = f"`{primary_prefix}{cmd_name}` - {doc}"
+                
+                # Categorize based on command name
+                if cmd_name in ["hello", "ping"]:
+                    basic_commands.append(cmd_line)
+                elif cmd_name in ["search", "set"]:
+                    video_commands.append(cmd_line)
+                elif cmd_name in ["truth", "dare"]:
+                    game_commands.append(cmd_line)
+                else:
+                    info_commands.append(cmd_line)
             
-            prefixes_str = ", ".join(self.command_prefixes)
-            help_text = f"**Available Commands:** (prefixes: {prefixes_str})\n" + "\n".join(commands_list)
+            # Build help text
+            help_parts = [f"**📋 Available Commands**"]
+            
+            if other_prefixes:
+                help_parts.append(f"*Prefixes: {primary_prefix}, {other_prefixes}*\n")
+            else:
+                help_parts.append(f"*Prefix: {primary_prefix}*\n")
+            
+            if basic_commands:
+                help_parts.append("**Basic Commands:**")
+                help_parts.extend(basic_commands)
+                help_parts.append("")
+            
+            if video_commands:
+                help_parts.append("**Video Commands:**")
+                help_parts.extend(video_commands)
+                help_parts.append("")
+            
+            if game_commands:
+                help_parts.append("**Game Commands:**")
+                help_parts.extend(game_commands)
+                help_parts.append("")
+            
+            if info_commands:
+                help_parts.append("**Info Commands:**")
+                help_parts.extend(info_commands)
+            
+            help_text = "\n".join(help_parts)
             await ctx.reply(help_text)
         
         @self.command("ping")
@@ -411,11 +458,61 @@ class RaveBot:
         except Exception as e:
             logger.error(f"Error handling message: {e}", exc_info=True)
     
+    async def _initialize_users_from_mesh_info(self):
+        """Initialize user list from mesh info API (called on connect)"""
+        try:
+            from ..utils.helpers import get_mesh_info
+            from ..api import RaveAPIClient
+            
+            # Create API client from bot's auth_token
+            api_client = RaveAPIClient(auth_token=self.auth_token)
+            mesh_info = get_mesh_info(self.room_id, api_client=api_client)
+            users = mesh_info.get("users", [])
+            
+            # Extract user IDs from the users list
+            # Users can be either dicts with 'id' key or just user IDs
+            initial_user_ids = set()
+            for user in users:
+                if isinstance(user, dict):
+                    user_id = user.get("id")
+                else:
+                    user_id = user
+                if user_id is not None:
+                    initial_user_ids.add(int(user_id))
+            
+            # Set initial user list (don't fire events for these)
+            self.current_user_ids = initial_user_ids
+            self._users_initialized = True
+            
+            # Cache user names if we have full user objects
+            if self.room_id not in self.user_name_cache:
+                self.user_name_cache[self.room_id] = {}
+            
+            for user in users:
+                if isinstance(user, dict):
+                    user_id = user.get("id")
+                    if user_id:
+                        display_name = user.get('displayName') or user.get('name') or user.get('handle') or f"User {user_id}"
+                        self.user_name_cache[self.room_id][int(user_id)] = display_name
+                        
+        except Exception as e:
+            logger.error(f"Error initializing users from mesh info: {e}", exc_info=True)
+            # If initialization fails, mark as initialized anyway to prevent spam
+            self._users_initialized = True
+    
     async def _handle_user_state_update(self, data: Dict[str, Any]):
         """Handle user state updates (join/leave detection)"""
         try:
             users = data.get("users", [])
             current_ids = {user.get("user_id") for user in users if user.get("user_id") is not None}
+            
+            # If users haven't been initialized yet, initialize from this state message
+            # (fallback if API call failed)
+            if not self._users_initialized:
+                self.current_user_ids = current_ids
+                self._users_initialized = True
+                # Don't fire events for initial users
+                return
             
             # Detect joins (new user IDs not in previous set)
             joined_ids = current_ids - self.current_user_ids
@@ -426,7 +523,7 @@ class RaveBot:
             # Update current user IDs
             self.current_user_ids = current_ids
             
-            # Handle joins
+            # Handle joins (only fire events for users who actually joined after initialization)
             if joined_ids:
                 await self._handle_users_joined(list(joined_ids))
             
@@ -478,56 +575,64 @@ class RaveBot:
         return fallback_name
     
     async def _handle_users_joined(self, user_ids: List[int]):
-        """Handle user joins - fetch user details and fire event"""
+        """Handle user joins - use cached data or create minimal user info"""
         if not user_ids:
             return
         
-        try:
-            # Get user details
-            response = get_users_list(ids=user_ids, device_id=self.device_id, include_online=True)
-            users_data = response.get("data", [])
-            
-            # Initialize cache for this mesh if needed
-            if self.room_id not in self.user_name_cache:
-                self.user_name_cache[self.room_id] = {}
-            
-            # Fire event for each joined user and cache names
-            for user_info in users_data:
-                user_id = user_info.get('id')
-                if user_id:
-                    display_name = user_info.get('displayName') or user_info.get('handle') or f"User {user_id}"
-                    # Cache the name
-                    self.user_name_cache[self.room_id][user_id] = display_name
-                
-                await self._dispatch_event("on_user_join", user_info)
+        # Initialize cache for this mesh if needed
+        if self.room_id not in self.user_name_cache:
+            self.user_name_cache[self.room_id] = {}
         
-        except Exception as e:
-            logger.error(f"Error fetching user details for joined users: {e}", exc_info=True)
+        # Use cached data or create minimal user_info (no API calls)
+        for user_id in user_ids:
+            # Get display name from cache if available
+            display_name = self.user_name_cache[self.room_id].get(user_id)
+            if not display_name:
+                # Not in cache, use fallback and cache it
+                display_name = f"User {user_id}"
+                self.user_name_cache[self.room_id][user_id] = display_name
+            
+            # Create user_info from cache
+            user_info = {
+                'id': user_id,
+                'displayName': display_name if display_name != f"User {user_id}" else None,
+                'handle': None,
+                'name': None
+            }
+            
+            # Fire event with cached/minimal info
+            await self._dispatch_event("on_user_join", self, user_info)
     
     async def _handle_users_left(self, user_ids: List[int]):
-        """Handle user leaves - fetch user details and fire event"""
+        """Handle user leaves - use cached data or create minimal user info"""
         if not user_ids:
             return
         
-        try:
-            # Get user details
-            response = get_users_list(ids=user_ids, device_id=self.device_id, include_online=True)
-            users_data = response.get("data", [])
+        # Use cached data or create minimal user_info (no API calls)
+        for user_id in user_ids:
+            # Get display name from cache if available
+            display_name = None
+            if self.room_id in self.user_name_cache:
+                display_name = self.user_name_cache[self.room_id].get(user_id)
             
-            # Fire event for each left user
-            for user_info in users_data:
-                await self._dispatch_event("on_user_left", user_info)
+            # Create user_info from cache or minimal info
+            user_info = {
+                'id': user_id,
+                'displayName': display_name if display_name and display_name != f"User {user_id}" else None,
+                'handle': None,
+                'name': None
+            }
             
-            # Check if bot is the last user remaining
-            if self.auto_leave_when_last and self.bot_user_id is not None:
-                # Check if only the bot remains
-                remaining_users = self.current_user_ids.copy()
-                if len(remaining_users) == 1 and self.bot_user_id in remaining_users:
-                    self.left_because_last_user = True
-                    await self._leave_mesh()
+            # Fire event with cached/minimal info
+            await self._dispatch_event("on_user_left", user_info)
         
-        except Exception as e:
-            logger.error(f"Error fetching user details for left users: {e}", exc_info=True)
+        # Check if bot is the last user remaining
+        if self.auto_leave_when_last and self.bot_user_id is not None:
+            # Check if only the bot remains
+            remaining_users = self.current_user_ids.copy()
+            if len(remaining_users) == 1 and self.bot_user_id in remaining_users:
+                self.left_because_last_user = True
+                await self._leave_mesh()
     
     async def _leave_mesh(self):
         """Leave the mesh and disconnect"""
@@ -557,17 +662,22 @@ class RaveBot:
         self._hello_sent = False
         
         # Initialize WebSocket client
+        async def on_connected_async():
+            """Async handler when bot connects - initialize users then fire on_connected event"""
+            # Initialize user list from mesh info first (wait for it to complete)
+            await self._initialize_users_from_mesh_info()
+            # Then fire on_connected event
+            await self._dispatch_event("on_connected", self)
+        
         def on_connected_callback():
-            """Callback when bot connects - fire on_connected event"""
-            # Fire on_connected event (handler can send hello message)
-            # Schedule async event dispatch
+            """Callback when bot connects - initialize users and fire on_connected event"""
             if hasattr(self, '_event_loop'):
-                self._event_loop.create_task(self._dispatch_event("on_connected", self))
+                self._event_loop.create_task(on_connected_async())
             else:
                 try:
                     loop = asyncio.get_event_loop()
                     if loop.is_running():
-                        loop.create_task(self._dispatch_event("on_connected", self))
+                        loop.create_task(on_connected_async())
                 except RuntimeError:
                     pass
         

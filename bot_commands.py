@@ -3,6 +3,7 @@ Bot command handlers
 """
 
 import logging
+import requests
 from rave_api.utils import get_video_id, vote_video
 from video_utils import search_and_send_videos, find_video_info_by_reply
 
@@ -70,4 +71,56 @@ def register_commands(manager):
         else:
             prefixes = ", ".join(ctx.bot.command_prefixes)
             await ctx.reply(f"Usage: {prefixes[0]}search <query>")
+    
+    @manager.command("truth")
+    async def truth_command(ctx):
+        """Get a truth question (rating: PG, PG13, or R)"""
+        rating = "PG"  # Default rating
+        if ctx.args:
+            rating_arg = ctx.args[0].upper()
+            if rating_arg in ["PG", "PG13", "R"]:
+                rating = rating_arg
+            else:
+                await ctx.reply(f"❌ Invalid rating. Use PG, PG13, or R. Using default: PG")
+        
+        try:
+            url = f"https://api.truthordarebot.xyz/v1/truth?rating={rating}"
+            response = requests.get(url, timeout=5)
+            response.raise_for_status()
+            data = response.json()
+            
+            question = data.get("question", "No question available")
+            await ctx.reply(f"**Truth ({rating}):**\n{question}")
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error fetching truth question: {e}", exc_info=True)
+            await ctx.reply("❌ Failed to fetch truth question. Please try again later.")
+        except Exception as e:
+            logger.error(f"Error in truth command: {e}", exc_info=True)
+            await ctx.reply("❌ An error occurred. Please try again later.")
+    
+    @manager.command("dare")
+    async def dare_command(ctx):
+        """Get a dare challenge (rating: PG, PG13, or R)"""
+        rating = "PG"  # Default rating
+        if ctx.args:
+            rating_arg = ctx.args[0].upper()
+            if rating_arg in ["PG", "PG13", "R"]:
+                rating = rating_arg
+            else:
+                await ctx.reply(f"❌ Invalid rating. Use PG, PG13, or R. Using default: PG")
+        
+        try:
+            url = f"https://api.truthordarebot.xyz/v1/dare?rating={rating}"
+            response = requests.get(url, timeout=5)
+            response.raise_for_status()
+            data = response.json()
+            
+            question = data.get("question", "No dare available")
+            await ctx.reply(f"**Dare ({rating}):**\n{question}")
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error fetching dare: {e}", exc_info=True)
+            await ctx.reply("❌ Failed to fetch dare. Please try again later.")
+        except Exception as e:
+            logger.error(f"Error in dare command: {e}", exc_info=True)
+            await ctx.reply("❌ An error occurred. Please try again later.")
 
